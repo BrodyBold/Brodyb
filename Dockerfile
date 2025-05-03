@@ -7,6 +7,7 @@ RUN apt-get update && \
     apt-get install -y git wget && \
     rm -rf /var/lib/apt/lists/*
 
+COPY requirements.txt /app/requirements.txt
 
 RUN git clone https://github.com/lllyasviel/FramePack.git . && \
     pip install --no-cache-dir -r requirements.txt
