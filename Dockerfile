@@ -41,12 +41,10 @@ RUN git clone -b dev https://github.com/camenduru/ComfyUI-Fluxpromptenhancer /co
 
 # ----------------------- Prepare folders -----------------------
 RUN mkdir -p /content/ComfyUI/models/clip \
-             /workspace/models/ltxv \
              /content/ComfyUI/models/LLM/Flux-Prompt-Enhance
 
-# ----------------------- Download model files -----------------------
+# ----------------------- Download model files (non-volume) -----------------------
 RUN wget -O /content/ComfyUI/models/clip/t5xxl_fp16.safetensors https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp16.safetensors
-RUN wget -O /workspace/models/ltxv/ltxv-13b-0.9.7-distilled.safetensors https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.7-distilled.safetensors
 
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/config.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/config.json
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/generation_config.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/generation_config.json
@@ -56,7 +54,7 @@ RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/spiece.model https:/
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/tokenizer.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/tokenizer.json
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/tokenizer_config.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/tokenizer_config.json
 
-# ----------------------- Copy worker script -----------------------
+# ----------------------- Worker script -----------------------
 COPY ./worker_runpod_i2v.py /content/ComfyUI/worker_runpod_i2v.py
 
 WORKDIR /content/ComfyUI
