@@ -34,16 +34,17 @@ RUN pip install xformers==0.0.28.post3
 RUN pip install opencv-python imageio imageio-ffmpeg ffmpeg-python av runpod
 RUN pip install torchsde einops diffusers transformers accelerate peft timm kornia scikit-image moviepy==1.0.3
 
-# ----------------------- Clone repo & prepare folders -----------------------
+# ----------------------- Clone repos -----------------------
 RUN git clone https://github.com/comfyanonymous/ComfyUI /content/ComfyUI
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager /content/ComfyUI/custom_nodes/ComfyUI-Manager
 RUN git clone -b dev https://github.com/camenduru/ComfyUI-Fluxpromptenhancer /content/ComfyUI/custom_nodes/ComfyUI-Fluxpromptenhancer
 
+# ----------------------- Prepare folders -----------------------
 RUN mkdir -p /content/ComfyUI/models/clip \
-    /workspace/models/ltxv \
-    /content/ComfyUI/models/LLM/Flux-Prompt-Enhance
+             /workspace/models/ltxv \
+             /content/ComfyUI/models/LLM/Flux-Prompt-Enhance
 
-# ----------------------- Download all model files -----------------------
+# ----------------------- Download model files -----------------------
 RUN wget -O /content/ComfyUI/models/clip/t5xxl_fp16.safetensors https://huggingface.co/camenduru/FLUX.1-dev/resolve/main/t5xxl_fp16.safetensors
 RUN wget -O /workspace/models/ltxv/ltxv-13b-0.9.7-distilled.safetensors https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.7-distilled.safetensors
 
@@ -55,7 +56,7 @@ RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/spiece.model https:/
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/tokenizer.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/tokenizer.json
 RUN wget -O /content/ComfyUI/models/LLM/Flux-Prompt-Enhance/tokenizer_config.json https://huggingface.co/gokaygokay/Flux-Prompt-Enhance/raw/main/tokenizer_config.json
 
-# ----------------------- Worker -----------------------
+# ----------------------- Copy worker script -----------------------
 COPY ./worker_runpod_i2v.py /content/ComfyUI/worker_runpod_i2v.py
 
 WORKDIR /content/ComfyUI
