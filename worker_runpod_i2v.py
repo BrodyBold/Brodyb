@@ -26,11 +26,20 @@ SaveAnimatedWEBP = nodes_images.NODE_CLASS_MAPPINGS["SaveAnimatedWEBP"]()
 
 with torch.inference_mode():
     clip = CLIPLoader.load_clip("t5xxl_fp16.safetensors", type="ltxv")[0]
-    model_path = "/workspace/models/ltxv/ltxv-13b-0.9.7-distilled.safetensors"
+    
+    model_path = "/runpod-volume/models/ltxv/ltxv-13b-0.9.7-distilled.safetensors"
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found at {model_path}. Please ensure it's downloaded and volume is mounted.")
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        print("Downloading LTX model...")
+        url = "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-13b-0.9.7-distilled.safetensors"
+        r = requests.get(url, stream=True)
+        with open(model_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        print("Download complete.")
+    
     model, _, vae = CheckpointLoaderSimple.load_checkpoint(model_path)
-
 
 def download_file(url, save_dir, file_name):
     os.makedirs(save_dir, exist_ok=True)
