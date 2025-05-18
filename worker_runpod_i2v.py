@@ -103,6 +103,7 @@ def webp_to_mp4(wp, mp4, fps=10):
 def generate(job):
     vals = job["input"]
     jid  = vals.get("job_id","-")
+    mp4 = wp = None
 
     try:
         # 1) download input image
@@ -120,7 +121,6 @@ def generate(job):
         cneg=CLIPTextEnc.encode(clip, neg)[0]
         img = LoadImage.load_image(img_path)[0]
 
-        # include strength param (default 1.0)
         strength = vals.get("strength", 1.0)
         p,n,lat = Img2Vid.generate(
             cpos, cneg, img, vae,
@@ -146,18 +146,28 @@ def generate(job):
         )["ui"]["images"][0]["filename"]
         src = f"/content/ComfyUI/output/{ui}"
         wp  = f"/content/ltx-{seed}.webp"
-        shutil.move(src, wp)
         mp4 = f"/content/ltx-{seed}.mp4"
+        shutil.move(src, wp)
         webp_to_mp4(wp, mp4, fps=vals["fps"])
 
-        return {"jobId":jid, "result":mp4, "status":"DONE"}
+        # Upload ke transfer.sh
+        with open(mp4, "rb") as f:
+            upload = requests.put(
+                f"https://transfer.sh/{os.path.basename(mp4)}",
+                data=f,
+                headers={"Max-Downloads": "1", "Max-Days": "1"}
+            )
+            url = upload.text.strip()
+
+        return {"jobId": jid, "result": url, "status": "DONE"}
 
     except Exception as e:
-        return {"jobId":jid, "result":f"FAILED: {e}", "status":"FAILED"}
+        return {"jobId": jid, "result": f"FAILED: {e}", "status": "FAILED"}
 
     finally:
-        # cleanup
-        for f in ["mp4", "wp"]:
-            if os.path.exists(f): os.remove(f)
+        # Cleanup hasil render
+        for f in [mp4, wp]:
+            if f and os.path.exists(f):
+                os.remove(f)
 
 runpod.serverless.start({"handler": generate})
