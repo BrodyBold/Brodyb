@@ -1,4 +1,10 @@
-import os, shutil, json, requests, random, time, runpod
+import os
+import shutil
+import json
+import requests
+import random
+import time
+import runpod
 from urllib.parse import urlsplit
 
 import torch
@@ -14,145 +20,167 @@ from folder_paths import add_model_folder_path
 load_custom_node("/content/ComfyUI/custom_nodes/ComfyUI-Fluxpromptenhancer")
 
 # Register model folder as ComfyUI checkpoints folder
-ltx_model_dir = "/runpod-volume/models/ltxv"
+ltx_model_dir      = "/runpod-volume/models/ltxv"
 ltx_model_filename = "ltxv-13b-0.9.7-distilled.safetensors"
-ltx_model_path = os.path.join(ltx_model_dir, ltx_model_filename)
+ltx_model_path     = os.path.join(ltx_model_dir, ltx_model_filename)
 add_model_folder_path("checkpoints", ltx_model_dir)
 
-# Ensure model exists in volume, or download
+# Ensure model exists in volume, or download once
 if not os.path.exists(ltx_model_path):
     os.makedirs(ltx_model_dir, exist_ok=True)
     print("Downloading LTX model...")
     url = f"https://huggingface.co/Lightricks/LTX-Video/resolve/main/{ltx_model_filename}"
-    r = requests.get(url, stream=True)
+    r = requests.get(url, stream=True, timeout=120)
+    r.raise_for_status()
     with open(ltx_model_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=8192):
             if chunk:
                 f.write(chunk)
     print("Download complete.")
 
-# Init nodes
-FluxPromptEnhance = NODE_CLASS_MAPPINGS["FluxPromptEnhance"]()
-CLIPLoader = NODE_CLASS_MAPPINGS["CLIPLoader"]()
-CLIPTextEncode = NODE_CLASS_MAPPINGS["CLIPTextEncode"]()
-LoadImage = NODE_CLASS_MAPPINGS["LoadImage"]()
-CheckpointLoaderSimple = NODE_CLASS_MAPPINGS["CheckpointLoaderSimple"]()
-LTXVImgToVideo = nodes_lt.NODE_CLASS_MAPPINGS["LTXVImgToVideo"]()
-LTXVConditioning = nodes_lt.NODE_CLASS_MAPPINGS["LTXVConditioning"]()
-SamplerCustom = nodes_custom_sampler.NODE_CLASS_MAPPINGS["SamplerCustom"]()
-KSamplerSelect = nodes_custom_sampler.NODE_CLASS_MAPPINGS["KSamplerSelect"]()
-LTXVScheduler = nodes_lt.NODE_CLASS_MAPPINGS["LTXVScheduler"]()
-VAEDecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
-SaveAnimatedWEBP = nodes_images.NODE_CLASS_MAPPINGS["SaveAnimatedWEBP"]()
+# Init ComfyUI nodes
+FluxPromptEnhance  = NODE_CLASS_MAPPINGS["FluxPromptEnhance"]()
+CLIPLoader         = NODE_CLASS_MAPPINGS["CLIPLoader"]()
+CLIPTextEncode     = NODE_CLASS_MAPPINGS["CLIPTextEncode"]()
+LoadImage          = NODE_CLASS_MAPPINGS["LoadImage"]()
+CheckpointLoader   = NODE_CLASS_MAPPINGS["CheckpointLoaderSimple"]()
+LTXVImgToVideo     = nodes_lt.NODE_CLASS_MAPPINGS["LTXVImgToVideo"]()
+LTXVConditioning   = nodes_lt.NODE_CLASS_MAPPINGS["LTXVConditioning"]()
+SamplerCustom      = nodes_custom_sampler.NODE_CLASS_MAPPINGS["SamplerCustom"]()
+KSamplerSelect     = nodes_custom_sampler.NODE_CLASS_MAPPINGS["KSamplerSelect"]()
+LTXVScheduler      = nodes_lt.NODE_CLASS_MAPPINGS["LTXVScheduler"]()
+VAEDecode          = NODE_CLASS_MAPPINGS["VAEDecode"]()
+SaveAnimatedWEBP   = nodes_images.NODE_CLASS_MAPPINGS["SaveAnimatedWEBP"]()
 
 with torch.inference_mode():
-    clip = CLIPLoader.load_clip("t5xxl_fp16.safetensors", type="ltxv")[0]
-    model, _, vae = CheckpointLoaderSimple.load_checkpoint(ltx_model_filename)
+    clip  = CLIPLoader.load_clip("t5xxl_fp16.safetensors", type="ltxv")[0]
+    model, _, vae = CheckpointLoader.load_checkpoint(ltx_model_filename)
 
-def download_file(url, save_dir, file_name):
+def download_file(url, save_dir, file_name, max_retries=3):
     os.makedirs(save_dir, exist_ok=True)
-    file_suffix = os.path.splitext(urlsplit(url).path)[1]
-    file_path = os.path.join(save_dir, file_name + file_suffix)
-    response = requests.get(url)
-    response.raise_for_status()
-    with open(file_path, 'wb') as file:
-        file.write(response.content)
-    return file_path
+    suffix   = os.path.splitext(urlsplit(url).path)[1]
+    out_path = os.path.join(save_dir, file_name + suffix)
+    headers  = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept":     "image/*,*/*;q=0.8"
+    }
+    for attempt in range(1, max_retries+1):
+        resp = requests.get(url, headers=headers, stream=True, timeout=30)
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            print(f"[download_file] 429, retrying in {wait}s… (attempt {attempt})")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        with open(out_path, "wb") as f:
+            for chunk in resp.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+        return out_path
+    raise requests.exceptions.HTTPError(
+        f"Failed to download {url} after {max_retries} retries (last status {resp.status_code})"
+    )
 
 def webp_to_mp4(input_webp, output_mp4, fps=10):
     with Image.open(input_webp) as img:
         frames = []
         try:
             while True:
-                frame = img.copy()
-                frames.append(frame)
-                img.seek(img.tell() + 1)
+                frames.append(img.copy())
+                img.seek(img.tell()+1)
         except EOFError:
             pass
     temp_dir = "temp_frames"
     os.makedirs(temp_dir, exist_ok=True)
-    temp_paths = []
+    paths = []
     for i, frame in enumerate(frames):
-        path = os.path.join(temp_dir, f"frame_{i:04d}.png")
-        frame.save(path)
-        temp_paths.append(path)
-    clip = ImageSequenceClip(temp_paths, fps=fps)
+        p = os.path.join(temp_dir, f"frame_{i:04d}.png")
+        frame.save(p)
+        paths.append(p)
+    clip = ImageSequenceClip(paths, fps=fps)
     clip.write_videofile(output_mp4, codec="libx264", fps=fps)
-    for path in temp_paths:
-        os.remove(path)
+    for p in paths: os.remove(p)
     os.rmdir(temp_dir)
 
 @torch.inference_mode()
-def generate(input):
-    values = input["input"]
-    job_id = values.get('job_id', 'unknown')
-    notify_uri = values.get('notify_uri')
-    notify_token = values.get('notify_token')
+def generate(job):
+    values      = job["input"]
+    job_id      = values.get("job_id", "unknown")
+    notify_uri  = values.get("notify_uri")
+    notify_tok  = values.get("notify_token")
 
-    input_image = download_file(values['input_image'], '/content/ComfyUI/input', 'input_image')
-    positive_prompt = values['positive_prompt']
-    negative_prompt = values['negative_prompt']
-    if values['noise_seed'] == 0:
-        values['noise_seed'] = random.randint(0, 18446744073709551615)
-
-    if values['prompt_enhance']:
-        positive_prompt = FluxPromptEnhance.enhance_prompt(positive_prompt, values['noise_seed'])[0]
-
-    conditioning_positive = CLIPTextEncode.encode(clip, positive_prompt)[0]
-    conditioning_negative = CLIPTextEncode.encode(clip, negative_prompt)[0]
-    image = LoadImage.load_image(input_image)[0]
-
-    positive, negative, latent_image = LTXVImgToVideo.generate(
-        conditioning_positive, conditioning_negative, image, vae,
-        values['width'], values['height'], values['length'], batch_size=1
+    # Download input image
+    input_image = download_file(
+        values["input_image"],
+        "/content/ComfyUI/input",
+        "input_image"
     )
-    positive, negative = LTXVConditioning.append(positive, negative, values['frame_rate'])
-    sampler = KSamplerSelect.get_sampler(values['sampler_name'])[0]
-    sigmas = LTXVScheduler.get_sigmas(
-        values['steps'], values['max_shift'], values['base_shift'],
-        values['stretch'], values['terminal'], latent=None
+
+    # Prepare prompts and seed
+    if values["noise_seed"] == 0:
+        values["noise_seed"] = random.randint(0, 2**63-1)
+    positive = values["positive_prompt"]
+    if values["prompt_enhance"]:
+        positive = FluxPromptEnhance.enhance_prompt(positive, values["noise_seed"])[0]
+    negative = values["negative_prompt"]
+
+    # Encode conditioning
+    c_pos = CLIPTextEncode.encode(clip, positive)[0]
+    c_neg = CLIPTextEncode.encode(clip, negative)[0]
+    img   = LoadImage.load_image(input_image)[0]
+
+    # Generate latent video
+    pos, neg, latent = LTXVImgToVideo.generate(
+        c_pos, c_neg, img, vae,
+        values["width"], values["height"], values["length"],
+        batch_size=1
+    )
+    pos, neg = LTXVConditioning.append(pos, neg, values["frame_rate"])
+    sampler = KSamplerSelect.get_sampler(values["sampler_name"])[0]
+    sigmas  = LTXVScheduler.get_sigmas(
+        values["steps"], values["max_shift"], values["base_shift"],
+        values["stretch"], values["terminal"], latent=None
     )[0]
     samples = SamplerCustom.sample(
-        model, values['add_noise'], values['noise_seed'], values['cfg'],
-        positive, negative, sampler, sigmas, latent_image
+        model, values["add_noise"], values["noise_seed"],
+        values["cfg"], pos, neg, sampler, sigmas, latent
     )[0]
-    images = VAEDecode.decode(vae, samples)[0].detach()
-    video = SaveAnimatedWEBP.save_images(
-        images, values['fps'], filename_prefix=f"ltx-video-{values['noise_seed']}-tost",
-        lossless=False, quality=90, method="default"
-    )
+    images  = VAEDecode.decode(vae, samples)[0].detach()
 
-    source = f"/content/ComfyUI/output/{video['ui']['images'][0]['filename']}"
-    destination = f"/content/ltx-video-{values['noise_seed']}-tost.webp"
-    shutil.move(source, destination)
-    webp_to_mp4(destination, f"/content/ltx-video-{values['noise_seed']}-tost.mp4", fps=values['fps'])
+    # Save as WEBP then MP4
+    ui = SaveAnimatedWEBP.save_images(
+        images, values["fps"],
+        filename_prefix=f"ltx-video-{values['noise_seed']}-tost",
+        lossless=False, quality=90, method="default"
+    )["ui"]["images"][0]["filename"]
+    src = f"/content/ComfyUI/output/{ui}"
+    dst = f"/content/ltx-video-{values['noise_seed']}-tost.webp"
+    shutil.move(src, dst)
+    webp_to_mp4(dst, f"/content/ltx-video-{values['noise_seed']}-tost.mp4", fps=values["fps"])
 
     result = f"/content/ltx-video-{values['noise_seed']}-tost.mp4"
-    result_url = result
-
+    payload = {"jobId": job_id, "result": result, "status": "DONE"}
     try:
-        payload = {"jobId": job_id, "result": result_url, "status": "DONE"}
-        web_notify_uri = os.getenv('com_camenduru_web_notify_uri')
-        web_notify_token = os.getenv('com_camenduru_web_notify_token')
+        web_uri = os.getenv("com_camenduru_web_notify_uri")
+        web_tok = os.getenv("com_camenduru_web_notify_token")
         if notify_uri == "notify_uri":
-            requests.post(web_notify_uri, json=payload, headers={"Authorization": web_notify_token})
+            requests.post(web_uri, json=payload, headers={"Authorization": web_tok})
         else:
-            requests.post(web_notify_uri, json=payload, headers={"Authorization": web_notify_token})
-            requests.post(notify_uri, json=payload, headers={"Authorization": notify_token})
-        return {"result": result_url, "status": "DONE"}
+            requests.post(web_uri, json=payload, headers={"Authorization": web_tok})
+            requests.post(notify_uri, json=payload, headers={"Authorization": notify_tok})
+        return payload
     except Exception as e:
-        payload = {"jobId": job_id, "status": "FAILED"}
+        err = {"jobId": job_id, "result": f"FAILED: {e}", "status": "FAILED"}
         try:
             if notify_uri == "notify_uri":
-                requests.post(web_notify_uri, json=payload, headers={"Authorization": web_notify_token})
+                requests.post(web_uri, json=err, headers={"Authorization": web_tok})
             else:
-                requests.post(web_notify_uri, json=payload, headers={"Authorization": web_notify_token})
-                requests.post(notify_uri, json=payload, headers={"Authorization": notify_token})
-        except:
-            pass
-        return {"jobId": job_id, "result": f"FAILED: {str(e)}", "status": "FAILED"}
+                requests.post(web_uri, json=err, headers={"Authorization": web_tok})
+                requests.post(notify_uri, json=err, headers={"Authorization": notify_tok})
+        except: pass
+        return err
     finally:
-        for f in [result, destination]:
+        for f in [result, dst]:
             if os.path.exists(f):
                 os.remove(f)
 
